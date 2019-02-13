@@ -26,6 +26,10 @@ from deeplab.utils import input_generator
 from deeplab.utils import train_utils
 from deployment import model_deploy
 
+from os import environ
+from pathlib import Path
+from shutil import copy
+
 slim = tf.contrib.slim
 
 prefetch_queue = slim.prefetch_queue
@@ -242,8 +246,14 @@ def main(unused_argv):
   clone_batch_size = FLAGS.train_batch_size // config.num_clones
 
   # Get dataset-dependent information.
+  tmp_dir = environ['TMPDIR']
+  dataset_dir = Path(tmp_dir, 'tfrecord')
+  dataset_dir.mkdir(exist_ok=True)
+  for p in Path(FLAGS.dataset_dir).iterdir():
+      if not Path(dataset_dir, p.name).exists():
+          copy(str(p), dataset_dir)
   dataset = segmentation_dataset.get_dataset(
-      FLAGS.dataset, FLAGS.train_split, dataset_dir=FLAGS.dataset_dir)
+      FLAGS.dataset, FLAGS.train_split, dataset_dir=dataset_dir)
 
   tf.gfile.MakeDirs(FLAGS.train_logdir)
   tf.logging.info('Training on %s set', FLAGS.train_split)
@@ -262,6 +272,8 @@ def main(unused_argv):
           scale_factor_step_size=FLAGS.scale_factor_step_size,
           dataset_split=FLAGS.train_split,
           is_training=True,
+          num_readers=4,
+          num_threads=4,
           model_variant=FLAGS.model_variant)
       inputs_queue = prefetch_queue.prefetch_queue(
           samples, capacity=128 * config.num_clones)
