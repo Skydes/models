@@ -24,6 +24,12 @@ import tensorflow as tf
 
 flags = tf.app.flags
 
+# New flags
+
+flags.DEFINE_boolean('bayesian', False, 'Train with dropout layers.')
+
+flags.DEFINE_boolean('test_with_dropout', False, 'Enable dropout at test time.')
+
 # Flags for input preprocessing.
 
 flags.DEFINE_integer('min_resize_value', None,
@@ -129,6 +135,8 @@ class ModelOptions(
         'model_variant',
         'depth_multiplier',
         'dense_prediction_cell_config',
+        'bayesian',
+        'test_with_dropout',
     ])):
   """Immutable class to hold model options."""
 
@@ -164,7 +172,7 @@ class ModelOptions(
         FLAGS.aspp_with_separable_conv, FLAGS.multi_grid,
         FLAGS.decoder_output_stride, FLAGS.decoder_use_separable_conv,
         FLAGS.logits_kernel_size, FLAGS.model_variant, FLAGS.depth_multiplier,
-        dense_prediction_cell_config)
+        dense_prediction_cell_config, FLAGS.bayesian, FLAGS.test_with_dropout)
 
   def __deepcopy__(self, memo):
     return ModelOptions(copy.deepcopy(self.outputs_to_num_classes),

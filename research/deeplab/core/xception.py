@@ -200,6 +200,7 @@ def xception_module(inputs,
                     activation_fn_in_separable_conv=False,
                     regularize_depthwise=False,
                     outputs_collections=None,
+                    bayesian=False,
                     scope=None):
   """An Xception module.
 
@@ -287,6 +288,8 @@ def xception_module(inputs,
       outputs = residual
     else:
       raise ValueError('Unsupported skip connection type.')
+    if bayesian:
+      outputs = slim.dropout(outputs, keep_prob=0.5, scope='dropout')
 
     return slim.utils.collect_named_outputs(outputs_collections,
                                             sc.name,
@@ -367,6 +370,7 @@ def xception(inputs,
              blocks,
              num_classes=None,
              is_training=True,
+             test_with_dropout=False,
              global_pool=True,
              keep_prob=0.5,
              output_stride=None,
@@ -420,7 +424,9 @@ def xception(inputs,
                          xception_module,
                          stack_blocks_dense],
                         outputs_collections=end_points_collection):
-      with slim.arg_scope([slim.batch_norm], is_training=is_training):
+      with slim.arg_scope([slim.batch_norm], is_training=is_training), \
+           slim.arg_scope([slim.dropout], is_training=(is_training
+                                                       or test_with_dropout)):
         net = inputs
         if output_stride is not None:
           if output_stride % 2 != 0:
@@ -460,6 +466,7 @@ def xception_block(scope,
                    regularize_depthwise,
                    num_units,
                    stride,
+                   bayesian=False,
                    unit_rate_list=None):
   """Helper function for creating a Xception block.
 
@@ -490,7 +497,8 @@ def xception_block(scope,
       'regularize_depthwise': regularize_depthwise,
       'stride': stride,
       'unit_rate_list': unit_rate_list,
-  }] * num_units)
+      'bayesian': bayesian and not ((i+1) % 4),
+  } for i, _ in enumerate(range(num_units))])
 
 
 def xception_41(inputs,
@@ -568,6 +576,8 @@ def xception_65(inputs,
                 output_stride=None,
                 regularize_depthwise=False,
                 multi_grid=None,
+                bayesian=False,
+                test_with_dropout=False,
                 reuse=None,
                 scope='xception_65'):
   """Xception-65 model."""
@@ -598,6 +608,7 @@ def xception_65(inputs,
                      skip_connection_type='sum',
                      activation_fn_in_separable_conv=False,
                      regularize_depthwise=regularize_depthwise,
+                     bayesian=bayesian,
                      num_units=16,
                      stride=1),
       xception_block('exit_flow/block1',
@@ -620,6 +631,7 @@ def xception_65(inputs,
                   blocks=blocks,
                   num_classes=num_classes,
                   is_training=is_training,
+                  test_with_dropout=test_with_dropout,
                   global_pool=global_pool,
                   keep_prob=keep_prob,
                   output_stride=output_stride,
@@ -635,6 +647,8 @@ def xception_71(inputs,
                 output_stride=None,
                 regularize_depthwise=False,
                 multi_grid=None,
+                bayesian=False,
+                test_with_dropout=False,
                 reuse=None,
                 scope='xception_71'):
   """Xception-71 model."""
@@ -679,6 +693,7 @@ def xception_71(inputs,
                      skip_connection_type='sum',
                      activation_fn_in_separable_conv=False,
                      regularize_depthwise=regularize_depthwise,
+                     bayesian=bayesian,
                      num_units=16,
                      stride=1),
       xception_block('exit_flow/block1',
@@ -701,6 +716,7 @@ def xception_71(inputs,
                   blocks=blocks,
                   num_classes=num_classes,
                   is_training=is_training,
+                  test_with_dropout=test_with_dropout,
                   global_pool=global_pool,
                   keep_prob=keep_prob,
                   output_stride=output_stride,

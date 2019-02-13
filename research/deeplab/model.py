@@ -357,6 +357,8 @@ def extract_features(images,
       weight_decay=weight_decay,
       reuse=reuse,
       is_training=is_training,
+      bayesian=model_options.bayesian,
+      test_with_dropout=model_options.test_with_dropout,
       fine_tune_batch_norm=fine_tune_batch_norm)
 
   if not model_options.aspp_with_batch_norm:
