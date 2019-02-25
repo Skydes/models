@@ -470,7 +470,12 @@ def extract_features(images,
           # Merge branch logits.
           concat_logits = tf.concat(branch_logits, 3)
           concat_logits = slim.conv2d(
-              concat_logits, depth, 1, scope=CONCAT_PROJECTION_SCOPE)
+              concat_logits, depth, 1, scope=CONCAT_PROJECTION_SCOPE,
+              activation_fn=None)
+          prefix = '{}/'.format(tf.get_variable_scope().name)
+          end_points[prefix+'bottleneck_features_norelu'] = concat_logits
+          concat_logits = tf.nn.relu(concat_logits)
+          end_points[prefix+'bottleneck_features'] = concat_logits
           concat_logits = slim.dropout(
               concat_logits,
               keep_prob=0.9,
