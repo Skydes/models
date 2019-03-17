@@ -42,7 +42,8 @@ def split_separable_conv2d(inputs,
     weight_decay=0.00004,
     depthwise_weights_initializer_stddev=0.33,
     pointwise_weights_initializer_stddev=0.06,
-    scope=None):
+    scope=None,
+    return_no_relu=False):
   """Splits a separable conv2d into depthwise and pointwise conv2d.
 
   This operation differs from `tf.layers.separable_conv2d` as this operation
@@ -74,11 +75,16 @@ def split_separable_conv2d(inputs,
           stddev=depthwise_weights_initializer_stddev),
       weights_regularizer=None,
       scope=scope + '_depthwise')
-  return slim.conv2d(
+  outputs = slim.conv2d(
       outputs,
       filters,
       1,
       weights_initializer=tf.truncated_normal_initializer(
           stddev=pointwise_weights_initializer_stddev),
       weights_regularizer=slim.l2_regularizer(weight_decay),
-      scope=scope + '_pointwise')
+      scope=scope + '_pointwise', activation_fn=None)
+  if return_no_relu:
+      return tf.nn.relu(outputs), outputs
+  else:
+      return tf.nn.relu(outputs)
+

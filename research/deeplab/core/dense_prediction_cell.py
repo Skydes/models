@@ -278,11 +278,15 @@ class DensePredictionCell(object):
           concat_logits = slim.conv2d(concat_logits,
                                       self.hparams['concat_channels'],
                                       1,
-                                      scope=_CONCAT_PROJECTION_SCOPE)
+                                      scope=_CONCAT_PROJECTION_SCOPE,
+                                      activation_fn=None)
+          bottleneck_features_norelu = concat_logits
+          concat_logits = tf.nn.relu(concat_logits)
+          bottleneck_features = concat_logits
           if self.hparams['dropout_on_projection_features']:
             concat_logits = slim.dropout(
                 concat_logits,
                 keep_prob=self.hparams['dropout_keep_prob'],
                 is_training=is_training,
                 scope=_CONCAT_PROJECTION_SCOPE + '_dropout')
-          return concat_logits
+          return concat_logits, bottleneck_features_norelu, bottleneck_features

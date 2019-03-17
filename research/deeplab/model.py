@@ -371,7 +371,8 @@ def extract_features(images,
           hparams={
             'conv_rate_multiplier': 16 // model_options.output_stride,
           })
-      concat_logits = dense_prediction_layer.build_cell(
+      concat_logits, bottleneck_features_norelu, bottleneck_features = \
+              dense_prediction_layer.build_cell(
           features,
           output_stride=model_options.output_stride,
           crop_size=model_options.crop_size,
@@ -380,6 +381,9 @@ def extract_features(images,
           reuse=reuse,
           is_training=is_training,
           fine_tune_batch_norm=fine_tune_batch_norm)
+      prefix = '{}/'.format(tf.get_variable_scope().name)
+      end_points[prefix+'bottleneck_features_norelu'] = bottleneck_features_norelu
+      end_points[prefix+'bottleneck_features'] = bottleneck_features
       return concat_logits, end_points
     else:
       # The following codes employ the DeepLabv3 ASPP module. Note that We
