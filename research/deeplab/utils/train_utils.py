@@ -17,6 +17,7 @@
 import six
 
 import tensorflow as tf
+import tensorflow_probability as tfp
 from deeplab.core import preprocess_utils
 
 slim = tf.contrib.slim
@@ -28,7 +29,9 @@ def add_softmax_cross_entropy_loss_for_each_scale(scales_to_logits,
                                                   ignore_label,
                                                   loss_weight=1.0,
                                                   upsample_logits=True,
-                                                  scope=None):
+                                                  scope=None,
+                                                  max_entropy_on_ignore=False,
+                                                  train_with_void_class=False):
   """Adds softmax cross entropy loss for logits of each scale.
 
   Args:
@@ -67,15 +70,125 @@ def add_softmax_cross_entropy_loss_for_each_scale(scales_to_logits,
           align_corners=True)
 
     scaled_labels = tf.reshape(scaled_labels, shape=[-1])
-    not_ignore_mask = tf.to_float(tf.not_equal(scaled_labels,
-                                               ignore_label)) * loss_weight
     one_hot_labels = slim.one_hot_encoding(
         scaled_labels, num_classes, on_value=1.0, off_value=0.0)
+    if max_entropy_on_ignore:
+      not_ignore_mask = loss_weight
+      flat_one_hot = tf.ones_like(one_hot_labels) / num_classes
+      one_hot_labels = tf.where(
+          tf.equal(scaled_labels, ignore_label),
+          flat_one_hot, one_hot_labels)
+    elif train_with_void_class:
+      not_ignore_mask = loss_weight
+      scaled_labels = tf.where(tf.equal(scaled_labels, ignore_label),
+                               tf.ones_like(scaled_labels) * (num_classes - 1),
+                               scaled_labels)
+      one_hot_labels = slim.one_hot_encoding(
+          scaled_labels, num_classes, on_value=1.0, off_value=0.0)
+    else:
+      not_ignore_mask = tf.to_float(tf.not_equal(scaled_labels,
+                                                 ignore_label)) * loss_weight
     tf.losses.softmax_cross_entropy(
         one_hot_labels,
         tf.reshape(logits, shape=[-1, num_classes]),
         weights=not_ignore_mask,
         scope=loss_scope)
+
+
+def add_dirichlet_loss_for_each_scale(scales_to_logits,
+                                      labels,
+                                      num_classes,
+                                      ignore_label,
+                                      ood_weight=0.,
+                                      cross_entropy_weight=0.,
+                                      label_smoothing=0.1,
+                                      upsample_logits=True,
+                                      scope=None):
+  if labels is None:
+    raise ValueError('No label for softmax cross entropy loss.')
+
+  for scale, logits in six.iteritems(scales_to_logits):
+    loss_scope = None
+    if scope:
+      loss_scope = '%s_%s' % (scope, scale)
+
+    if upsample_logits:
+      # Label is not downsampled, and instead we upsample logits.
+      logits = tf.image.resize_bilinear(
+          logits,
+          preprocess_utils.resolve_shape(labels, 4)[1:3],
+          align_corners=True)
+      scaled_labels = labels
+    else:
+      # Label is downsampled to the same size as logits.
+      scaled_labels = tf.image.resize_nearest_neighbor(
+          labels,
+          preprocess_utils.resolve_shape(logits, 4)[1:3],
+          align_corners=True)
+
+    scaled_labels = tf.reshape(scaled_labels, shape=[-1])
+    one_hot_labels = slim.one_hot_encoding(
+        scaled_labels, num_classes, on_value=1.0, off_value=0.0)
+    smooth_labels = (one_hot_labels * (1. - label_smoothing)
+                     + label_smoothing / num_classes)
+    in_mask = tf.not_equal(scaled_labels, ignore_label)
+    logits = tf.reshape(logits, shape=[-1, num_classes])
+
+    pred_in_dist = tfp.distributions.Dirichlet(
+        tf.exp(tf.boolean_mask(logits, in_mask)), allow_nan_stats=False)
+    alpha_0 = 1000
+    target_dist = tfp.distributions.Dirichlet(
+        tf.boolean_mask(smooth_labels, in_mask) * alpha_0, allow_nan_stats=False)
+    target_kl = tfp.distributions.kl_divergence(
+       target_dist, pred_in_dist, allow_nan_stats=True)
+    # target_kl = tf.Print(target_kl, [tf.reduce_mean(target_kl), tf.reduce_min(target_kl),
+                                     # tf.reduce_max(target_kl),
+                                     # tf.reduce_sum(tf.to_float(tf.is_finite(target_kl)))])
+    target_kl = tf.boolean_mask(target_kl, tf.is_finite(target_kl))
+    target_kl = tf.check_numerics(target_kl, 'In-distribution KL is inf or nan.')
+    target_loss  = tf.cond(
+        tf.equal(tf.shape(target_kl)[0], 0),
+        lambda: tf.constant(0.), lambda: tf.reduce_mean(target_kl))
+    target_loss = tf.identity(target_loss, loss_scope+'/target_kl')
+    tf.losses.add_loss(target_loss)
+
+    # log_prob = pred_dist.log_prob(smooth_labels)
+    # dirichlet_nll = - tf.reduce_mean(tf.boolean_mask(log_prob, in_mask))
+    # dirichlet_nll = tf.identity(dirichlet_nll, loss_scope+'/dirichlet_nll')
+    # tf.losses.add_loss(dirichlet_nll)
+
+    if ood_weight > 0:
+      ood_mask = tf.math.logical_not(in_mask)
+      pred_ood_dist = tfp.distributions.Dirichlet(
+          tf.exp(tf.boolean_mask(logits, ood_mask)), allow_nan_stats=False)
+      ood_dist = tfp.distributions.Dirichlet(
+          tf.ones(num_classes), allow_nan_stats=False)
+      ood_kl = tfp.distributions.kl_divergence(
+          ood_dist, pred_ood_dist, allow_nan_stats=True)
+      ood_kl = tf.boolean_mask(ood_kl, tf.is_finite(ood_kl))
+      ood_kl = tf.check_numerics(ood_kl, 'OoD KL is inf or nan.')
+      ood_loss  = tf.cond(
+          tf.equal(tf.shape(ood_kl)[0], 0),
+          lambda: tf.constant(0.), lambda: ood_weight * tf.reduce_mean(ood_kl))
+      ood_loss = tf.identity(ood_loss, loss_scope+'/ood_kl')
+      # ood_loss = tf.Print(ood_loss, [tf.reduce_mean(target_kl), tf.reduce_min(target_kl),
+                                     # tf.reduce_max(target_kl),
+                                     # tf.reduce_mean(ood_kl), tf.reduce_min(ood_kl),
+                                     # tf.reduce_max(ood_kl)], summarize=5)
+      tf.losses.add_loss(ood_loss)
+
+    if cross_entropy_weight > 0:
+      ce_loss = tf.nn.softmax_cross_entropy_with_logits_v2(
+              labels=tf.boolean_mask(one_hot_labels, in_mask),
+              logits=tf.boolean_mask(logits, in_mask))
+      # ce_loss = tf.boolean_mask(ce_loss, tf.is_finite(ce_loss))
+      ce_loss  = tf.cond(
+          tf.equal(tf.shape(ce_loss)[0], 0),
+          lambda: tf.constant(0.),
+          lambda: cross_entropy_weight * tf.reduce_mean(ce_loss))
+      ce_loss = tf.check_numerics(ce_loss, 'CE loss is inf or nan.')
+      ce_loss = tf.identity(ce_loss, loss_scope+'/cross_entropy')
+      tf.losses.add_loss(ce_loss)
 
 
 def get_model_init_fn(train_logdir,

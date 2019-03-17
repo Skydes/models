@@ -120,6 +120,13 @@ flags.DEFINE_float('last_layer_gradient_multiplier', 1.0,
 flags.DEFINE_boolean('upsample_logits', True,
                      'Upsample logits during training.')
 
+flags.DEFINE_boolean('train_with_void_class', False, 'Train with void class')
+flags.DEFINE_boolean('max_entropy_on_ignore', False, 'Flat distribution on ignored pixels.')
+flags.DEFINE_boolean('use_dirichlet_loss', False, 'Dirichlet loss.')
+flags.DEFINE_float('ood_weight', 0.0, 'OOD weight')
+flags.DEFINE_float('dirichlet_cross_entropy_weight', 0.0, 'Cross entropy auxiliary weight')
+flags.DEFINE_float('label_smoothing', 0.01, 'Label smoothing factor')
+
 # Settings for fine-tuning the network.
 
 flags.DEFINE_string('tf_initial_checkpoint', None,
@@ -217,14 +224,28 @@ def _build_deeplab(inputs_queue, outputs_to_num_classes, ignore_label):
       name=common.OUTPUT_TYPE)
 
   for output, num_classes in six.iteritems(outputs_to_num_classes):
-    train_utils.add_softmax_cross_entropy_loss_for_each_scale(
-        outputs_to_scales_to_logits[output],
-        samples[common.LABEL],
-        num_classes,
-        ignore_label,
-        loss_weight=1.0,
-        upsample_logits=FLAGS.upsample_logits,
-        scope=output)
+    if FLAGS.use_dirichlet_loss:
+      train_utils.add_dirichlet_loss_for_each_scale(
+          outputs_to_scales_to_logits[output],
+          samples[common.LABEL],
+          num_classes,
+          ignore_label,
+          ood_weight=FLAGS.ood_weight,
+          cross_entropy_weight=FLAGS.dirichlet_cross_entropy_weight,
+          label_smoothing=FLAGS.label_smoothing,
+          upsample_logits=FLAGS.upsample_logits,
+          scope=output)
+    else:
+      train_utils.add_softmax_cross_entropy_loss_for_each_scale(
+          outputs_to_scales_to_logits[output],
+          samples[common.LABEL],
+          num_classes,
+          ignore_label,
+          loss_weight=1.0,
+          upsample_logits=FLAGS.upsample_logits,
+          scope=output,
+          max_entropy_on_ignore=FLAGS.max_entropy_on_ignore,
+          train_with_void_class=FLAGS.train_with_void_class)
 
   return outputs_to_scales_to_logits
 
@@ -283,9 +304,10 @@ def main(unused_argv):
       global_step = tf.train.get_or_create_global_step()
 
       # Define the model and create clones.
+      supp_class = 1 if FLAGS.train_with_void_class else 0
       model_fn = _build_deeplab
       model_args = (inputs_queue, {
-          common.OUTPUT_TYPE: dataset.num_classes
+          common.OUTPUT_TYPE: dataset.num_classes + supp_class
       }, dataset.ignore_label)
       clones = model_deploy.create_clones(config, model_fn, args=model_args)
 
