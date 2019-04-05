@@ -123,6 +123,8 @@ flags.DEFINE_boolean('upsample_logits', True,
 flags.DEFINE_boolean('train_with_void_class', False, 'Train with void class')
 flags.DEFINE_boolean('max_entropy_on_ignore', False, 'Flat distribution on ignored pixels.')
 flags.DEFINE_boolean('use_dirichlet_loss', False, 'Dirichlet loss.')
+flags.DEFINE_boolean('use_dirichlet_kl', True, 'Dirichlet KL.')
+flags.DEFINE_float('dirichlet_weight', 1.0, 'Dirichlet weight')
 flags.DEFINE_float('ood_weight', 0.0, 'OOD weight')
 flags.DEFINE_float('dirichlet_cross_entropy_weight', 0.0, 'Cross entropy auxiliary weight')
 flags.DEFINE_float('label_smoothing', 0.01, 'Label smoothing factor')
@@ -230,10 +232,12 @@ def _build_deeplab(inputs_queue, outputs_to_num_classes, ignore_label):
           samples[common.LABEL],
           num_classes,
           ignore_label,
+          dirichlet_weight=FLAGS.dirichlet_weight,
           ood_weight=FLAGS.ood_weight,
           cross_entropy_weight=FLAGS.dirichlet_cross_entropy_weight,
           label_smoothing=FLAGS.label_smoothing,
           upsample_logits=FLAGS.upsample_logits,
+          use_dirichlet_kl=FLAGS.use_dirichlet_kl,
           scope=output)
     else:
       train_utils.add_softmax_cross_entropy_loss_for_each_scale(

@@ -95,14 +95,23 @@ def add_softmax_cross_entropy_loss_for_each_scale(scales_to_logits,
         scope=loss_scope)
 
 
+def safe_mean(losses):
+  with tf.name_scope('safe_mean'):
+    total_loss = tf.reduce_sum(losses)
+    num_elements = tf.to_float(tf.shape(losses)[0])
+    return tf.div_no_nan(total_loss, num_elements, name="value")
+
+
 def add_dirichlet_loss_for_each_scale(scales_to_logits,
                                       labels,
                                       num_classes,
                                       ignore_label,
+                                      dirichlet_weight=1.0,
                                       ood_weight=0.,
                                       cross_entropy_weight=0.,
                                       label_smoothing=0.1,
                                       upsample_logits=True,
+                                      use_dirichlet_kl=True,
                                       scope=None):
   if labels is None:
     raise ValueError('No label for softmax cross entropy loss.')
@@ -133,29 +142,35 @@ def add_dirichlet_loss_for_each_scale(scales_to_logits,
                      + label_smoothing / num_classes)
     in_mask = tf.not_equal(scaled_labels, ignore_label)
     logits = tf.reshape(logits, shape=[-1, num_classes])
+    logits = tf.check_numerics(logits, 'Logits are inf or nan.')
 
     pred_in_dist = tfp.distributions.Dirichlet(
         tf.exp(tf.boolean_mask(logits, in_mask)), allow_nan_stats=False)
-    alpha_0 = 1000
-    target_dist = tfp.distributions.Dirichlet(
-        tf.boolean_mask(smooth_labels, in_mask) * alpha_0, allow_nan_stats=False)
-    target_kl = tfp.distributions.kl_divergence(
-       target_dist, pred_in_dist, allow_nan_stats=True)
-    # target_kl = tf.Print(target_kl, [tf.reduce_mean(target_kl), tf.reduce_min(target_kl),
-                                     # tf.reduce_max(target_kl),
-                                     # tf.reduce_sum(tf.to_float(tf.is_finite(target_kl)))])
-    target_kl = tf.boolean_mask(target_kl, tf.is_finite(target_kl))
-    target_kl = tf.check_numerics(target_kl, 'In-distribution KL is inf or nan.')
-    target_loss  = tf.cond(
-        tf.equal(tf.shape(target_kl)[0], 0),
-        lambda: tf.constant(0.), lambda: tf.reduce_mean(target_kl))
-    target_loss = tf.identity(target_loss, loss_scope+'/target_kl')
-    tf.losses.add_loss(target_loss)
 
-    # log_prob = pred_dist.log_prob(smooth_labels)
-    # dirichlet_nll = - tf.reduce_mean(tf.boolean_mask(log_prob, in_mask))
-    # dirichlet_nll = tf.identity(dirichlet_nll, loss_scope+'/dirichlet_nll')
-    # tf.losses.add_loss(dirichlet_nll)
+    if dirichlet_weight > 0:
+      if use_dirichlet_kl:
+        alpha_0 = 1000
+        target_dist = tfp.distributions.Dirichlet(
+            tf.boolean_mask(smooth_labels, in_mask) * alpha_0, allow_nan_stats=False)
+        target_kl = tfp.distributions.kl_divergence(
+           target_dist, pred_in_dist, allow_nan_stats=True)
+        # target_kl = tf.Print(target_kl, [tf.reduce_mean(target_kl), tf.reduce_min(target_kl),
+                                         # tf.reduce_max(target_kl),
+                                         # tf.reduce_sum(tf.to_float(tf.is_finite(target_kl)))])
+        target_kl = tf.boolean_mask(target_kl, tf.is_finite(target_kl))
+        target_kl = tf.check_numerics(target_kl, 'In-distribution KL is inf or nan.')
+        target_loss = dirichlet_weight * safe_mean(target_kl)
+        target_loss = tf.identity(target_loss, loss_scope+'/target_kl')
+        tf.losses.add_loss(target_loss)
+      else:
+        nll = -pred_in_dist.log_prob(tf.boolean_mask(smooth_labels, in_mask))
+        # nll = tf.Print(nll, [tf.shape(nll), tf.reduce_mean(nll), tf.reduce_min(nll),
+                             # tf.reduce_max(nll), tf.reduce_mean(tf.to_float(tf.is_finite(nll)))])
+        nll = tf.boolean_mask(nll, tf.is_finite(nll))
+        nll = tf.check_numerics(nll, 'In-distribution NLL is inf or nan.')
+        nll_loss = dirichlet_weight * safe_mean(nll)
+        nll_loss = tf.identity(nll_loss, loss_scope+'/dirichlet_nll')
+        tf.losses.add_loss(nll_loss)
 
     if ood_weight > 0:
       ood_mask = tf.math.logical_not(in_mask)
@@ -165,16 +180,12 @@ def add_dirichlet_loss_for_each_scale(scales_to_logits,
           tf.ones(num_classes), allow_nan_stats=False)
       ood_kl = tfp.distributions.kl_divergence(
           ood_dist, pred_ood_dist, allow_nan_stats=True)
+      # ood_kl = tf.Print(ood_kl, [tf.reduce_mean(ood_kl), tf.reduce_min(ood_kl),
+                                 # tf.reduce_max(ood_kl), tf.reduce_mean(tf.to_float(tf.is_finite(ood_kl)))])
       ood_kl = tf.boolean_mask(ood_kl, tf.is_finite(ood_kl))
       ood_kl = tf.check_numerics(ood_kl, 'OoD KL is inf or nan.')
-      ood_loss  = tf.cond(
-          tf.equal(tf.shape(ood_kl)[0], 0),
-          lambda: tf.constant(0.), lambda: ood_weight * tf.reduce_mean(ood_kl))
+      ood_loss = safe_mean(ood_weight * ood_kl)
       ood_loss = tf.identity(ood_loss, loss_scope+'/ood_kl')
-      # ood_loss = tf.Print(ood_loss, [tf.reduce_mean(target_kl), tf.reduce_min(target_kl),
-                                     # tf.reduce_max(target_kl),
-                                     # tf.reduce_mean(ood_kl), tf.reduce_min(ood_kl),
-                                     # tf.reduce_max(ood_kl)], summarize=5)
       tf.losses.add_loss(ood_loss)
 
     if cross_entropy_weight > 0:
@@ -182,10 +193,7 @@ def add_dirichlet_loss_for_each_scale(scales_to_logits,
               labels=tf.boolean_mask(one_hot_labels, in_mask),
               logits=tf.boolean_mask(logits, in_mask))
       # ce_loss = tf.boolean_mask(ce_loss, tf.is_finite(ce_loss))
-      ce_loss  = tf.cond(
-          tf.equal(tf.shape(ce_loss)[0], 0),
-          lambda: tf.constant(0.),
-          lambda: cross_entropy_weight * tf.reduce_mean(ce_loss))
+      ce_loss = safe_mean(cross_entropy_weight * ce_loss)
       ce_loss = tf.check_numerics(ce_loss, 'CE loss is inf or nan.')
       ce_loss = tf.identity(ce_loss, loss_scope+'/cross_entropy')
       tf.losses.add_loss(ce_loss)
